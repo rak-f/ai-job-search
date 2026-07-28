@@ -9,11 +9,20 @@ Base URL: `https://api.firecrawl.dev` (API version `v2`), overridable with the
 
 ## Authentication
 
-Every request sends `Authorization: Bearer $FIRECRAWL_API_KEY`. There is no
-anonymous mode for this skill: a missing key exits `1` with `NO_API_KEY` before any
-request is made, and a rejected key surfaces the API's own message.
+Requests carry `Authorization: Bearer $FIRECRAWL_API_KEY` **when a key is set**.
+Auth handling depends on which endpoint is targeted:
 
-Verified against the live API:
+| `FIRECRAWL_API_URL` | `FIRECRAWL_API_KEY` | Behaviour |
+|---------------------|---------------------|-----------|
+| unset (hosted cloud) | set | `Authorization` sent |
+| unset (hosted cloud) | unset | exits `1` with `NO_API_KEY` before any request |
+| set (self-hosted) | unset | **no `Authorization` header at all** — self-hosted Firecrawl [defaults to authentication disabled](https://github.com/firecrawl/firecrawl/blob/main/SELF_HOST.md), and a placeholder key would turn that into a 401 |
+| set (self-hosted) | set | `Authorization` sent to that instance |
+
+Note the last row's corollary: a key that is set is sent to whatever
+`FIRECRAWL_API_URL` names, so it should only point at a trusted host.
+
+Verified against the live cloud API:
 
 | Endpoint | Status |
 |----------|--------|
@@ -47,7 +56,7 @@ Body parameters used by the skill:
 | `query` | `--query` / `-q` | Required. Supports operators: `""`, `-`, `site:`, `inurl:`, `intitle:`, `filetype:` |
 | `limit` | `--limit` × `--page` | **Max 100** (verified: 101+ returns `too_big`) |
 | `sources` | — | Always `["web"]`; `news`/`images` are not job sources |
-| `tbs` | `--jobage` | Bucketed: `qdr:h`, `qdr:d`, `qdr:w`, `qdr:m`, `qdr:y`. Omitted when > 366 days |
+| `tbs` | `--jobage` | Bucketed: `qdr:h`, `qdr:d`, `qdr:w`, `qdr:m`, `qdr:y`. Omitted when > 366 days. Filters the **search index's freshness signal**, *not* the posting's `date_posted` — see "Recency" below |
 | `country` | `--country` | ISO-3166 alpha-2. API default `US` |
 | `location` | `--location` / `-l` | Free-text geo-target, e.g. `"Berlin,Germany"` |
 | `includeDomains` | `--site` | Bare hostnames, no scheme or path |
@@ -56,6 +65,27 @@ Body parameters used by the skill:
 
 There is **no offset/cursor parameter**, which is why `--page n` over-fetches
 `n × limit` results and returns the last window.
+
+### Recency (`tbs`) is not posting age
+
+`tbs` is applied by the search backend when selecting results, i.e. before any page
+is scraped and before `date_posted` exists. It therefore filters on how fresh the
+*index* considers the page, which is not the same as when the job was posted: a
+long-lived posting page that was recently recrawled can pass a narrow bucket, and a
+freshly posted job on a stale-looking page can be excluded. The skill maps
+`--jobage` onto it as a best-effort hint and documents it as such; precise
+posting-age filtering has to happen downstream on the extracted `date`.
+
+### Credits (measured live)
+
+| Request | Credits |
+|---------|---------|
+| search, no `scrapeOptions` | **2 per 10 results** (2 at `limit` 10, 4 at `limit` 15) |
+| search with `scrapeOptions` json extraction | 2 + **~5 per result** (12 at `limit` 2, 17 at `limit` 3, ~102 at `limit` 20) |
+| `POST /v2/scrape` with markdown + json | ~5 |
+
+`creditsUsed` is returned on every response and surfaced as `meta.credits_used`;
+treat the table as indicative and the response field as authoritative.
 
 ### Result items (`data.web[]`)
 

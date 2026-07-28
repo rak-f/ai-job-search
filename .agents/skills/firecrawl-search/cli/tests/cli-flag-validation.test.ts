@@ -5,7 +5,9 @@ import { runCLI } from "./helpers";
 // network-free and safe to run in CI. A dummy key is injected where the command
 // would otherwise short-circuit on NO_API_KEY, and cleared where that is the
 // behaviour under test - so the results do not depend on the developer's shell.
-const KEY = { FIRECRAWL_API_KEY: "fc-test-key" };
+// FIRECRAWL_API_URL is pinned empty so an instance configured in the developer's
+// shell cannot change which code path these cases take.
+const KEY = { FIRECRAWL_API_KEY: "fc-test-key", FIRECRAWL_API_URL: "" };
 
 function stderrJSON(stderr: string): { error: string; code: string } {
   return JSON.parse(stderr);
@@ -60,11 +62,29 @@ describe("CLI argument validation", () => {
   });
 
   test("a missing API key exits 1 with NO_API_KEY and names the variable", async () => {
-    const result = await runCLI(["search", "-q", "data engineer"], { FIRECRAWL_API_KEY: "" });
+    const result = await runCLI(["search", "-q", "data engineer"], {
+      FIRECRAWL_API_KEY: "",
+      FIRECRAWL_API_URL: "",
+    });
     expect(result.exitCode).toBe(1);
     const parsed = stderrJSON(result.stderr);
     expect(parsed.code).toBe("NO_API_KEY");
     expect(parsed.error).toContain("FIRECRAWL_API_KEY");
+  });
+
+  test("a keyless self-hosted instance is not rejected as NO_API_KEY", async () => {
+    // Self-hosted Firecrawl defaults to authentication disabled, so pointing
+    // FIRECRAWL_API_URL at one must reach the request rather than fail up front.
+    // Nothing listens on this port, so it fails at connect - which is the point:
+    // the error is a connection failure, not a missing credential.
+    const result = await runCLI(["search", "-q", "data engineer"], {
+      FIRECRAWL_API_KEY: "",
+      FIRECRAWL_API_URL: "http://127.0.0.1:9",
+    });
+    expect(result.exitCode).toBe(1);
+    const parsed = stderrJSON(result.stderr);
+    expect(parsed.code).toBe("SEARCH_FAILED");
+    expect(parsed.error).toContain("could not reach the Firecrawl API");
   });
 
   test("no arguments prints help to stdout and exits 1", async () => {

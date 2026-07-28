@@ -6,15 +6,23 @@ posting in full. There is no per-portal HTML parser: Firecrawl extracts the job
 fields from each posting page, so nothing here breaks when a board changes its markup.
 
 **Data source**: the Firecrawl v2 REST API (`POST /v2/search`, `POST /v2/scrape`).
-**Authentication**: required — `FIRECRAWL_API_KEY` ([get one](https://firecrawl.dev)).
+**Authentication**: `FIRECRAWL_API_KEY` ([get one](https://firecrawl.dev)) for the
+hosted API; not required against a self-hosted `FIRECRAWL_API_URL`.
 **Dependencies**: zero runtime dependencies (plain `fetch`, no SDK); dev types only.
 
 > **Credentialed and metered.** Unlike the other portal CLIs in this repo, this one
-> needs an API key and spends Firecrawl credits: 1 per plain search, plus roughly
-> 4-6 per result when enrichment is on (the default). The skill therefore ships
-> `enabled: false` so `/scrape` skips it until you opt in. Without a key every
-> command exits `1` with a `NO_API_KEY` error on stderr, so an unset key degrades
-> this source instead of breaking a run.
+> needs an API key and spends credits per result. Measured live:
+> **2 credits per 10 results** for a plain search (`--no-enrich`), plus **~5 per
+> result** when enrichment is on (the default) — so `--limit 20` costs ~102.
+> `meta.credits_used` reports the real figure on every run.
+>
+> The skill therefore ships `enabled: false` **as its steady state**, not as a
+> pending opt-in: `/scrape` has no metered-source tier, and would run this as a
+> co-equal primary at ~20 results across several queries. Invoke it directly with a
+> `--limit` you have chosen. See `../SKILL.md` for the full rationale.
+>
+> Without a key (and without a self-hosted URL) every command exits `1` with
+> `NO_API_KEY` on stderr, so nothing bills by accident.
 
 ## Installation
 
@@ -28,11 +36,17 @@ The install is optional — the CLI has no runtime dependencies and runs with pl
 ## Self-hosting / base URL
 
 Firecrawl is [open source](https://github.com/firecrawl/firecrawl). Point the CLI at
-your own instance with `FIRECRAWL_API_URL` (default `https://api.firecrawl.dev`):
+your own instance with `FIRECRAWL_API_URL` (default `https://api.firecrawl.dev`). A
+self-hosted instance runs unauthenticated by default, so **no key is needed** — and
+no credits are spent:
 
 ```bash
 FIRECRAWL_API_URL=http://localhost:3002 bun run src/cli.ts search -q "data engineer job"
 ```
+
+If your instance does require a key, set `FIRECRAWL_API_KEY` too and it is sent
+there. Whenever a key is set it goes to whatever `FIRECRAWL_API_URL` names, so don't
+point it at a host you don't trust with your cloud key.
 
 ## Commands
 
@@ -75,7 +89,7 @@ advice; `../url-reference.md` documents the API shapes this CLI depends on.
 | `--exclude-site <domains>` | | Drop these domains; mutually exclusive with `--site` |
 | `--country <code>` | | ISO-3166 alpha-2 search locale (default `US`) |
 | `--location <place>` | `-l` | Geo-target the results, e.g. `"Berlin,Germany"` |
-| `--jobage <days>` | | Posted within N days (bucketed to day/week/month/year) |
+| `--jobage <days>` | | Search-freshness hint, bucketed to day/week/month/year — **not** a filter on the posting date |
 | `--page <n>` | | 1-indexed page, default 1 (re-fetches; search has no offset param) |
 | `--limit <n>` | `-n` | Results per page, default 10; `page × limit` must be ≤ 100 |
 | `--no-enrich` | | Skip per-result extraction: cheap and fast, but no company/location/date |

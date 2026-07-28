@@ -183,7 +183,7 @@ done
 
 For `linkedin-search`, `freehire-search`, and `firecrawl-search` the install is optional: all three have zero runtime dependencies and run with plain `bun`; `bun install` only pulls TypeScript dev types.
 
-`firecrawl-search` additionally needs a [Firecrawl](https://firecrawl.dev) API key and ships disabled; if you want it, export `FIRECRAWL_API_KEY` and set `enabled: true` in `.agents/skills/firecrawl-search/SKILL.md`. Every other portal skill works without credentials.
+`firecrawl-search` additionally needs a [Firecrawl](https://firecrawl.dev) API key and is **metered per result**, so it ships `enabled: false` and is meant to be invoked directly rather than run by `/scrape` — export `FIRECRAWL_API_KEY` and call it when you need it. (A [self-hosted](https://github.com/firecrawl/firecrawl) instance via `FIRECRAWL_API_URL` needs no key and no credits.) Every other portal skill works without credentials.
 
 If you're outside Denmark, you can generate an equivalent search skill for your local job board with `/add-portal` — it scaffolds the same CLI structure for any public portal and test-runs a live query before registering. See the "Job search tools" section in the README.
 

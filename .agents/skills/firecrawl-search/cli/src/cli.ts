@@ -10,7 +10,7 @@
 
 import { runSearch, type SearchOpts } from "./commands/search.js"
 import { runDetail, type DetailOpts } from "./commands/detail.js"
-import { apiKey, baseUrl, normalizeDomain } from "./helpers.js"
+import { NO_API_KEY_MESSAGE, baseUrl, normalizeDomain, requiresApiKey } from "./helpers.js"
 
 interface Flags {
   _: string[]
@@ -80,7 +80,8 @@ SEARCH FLAGS
   --exclude-site <doms>   Drop these domains instead. Mutually exclusive with --site.
   --country <code>        ISO-3166 alpha-2 search locale, e.g. --country DK. Default US.
   --location, -l <place>  Geo-target the results, e.g. --location "Berlin,Germany"
-  --jobage <days>         Posted within N days (bucketed: day/week/month/year).
+  --jobage <days>         Search-freshness hint (bucketed: day/week/month/year).
+                          NOT a filter on the posting date - see SKILL.md.
   --page <n>              1-indexed page. Default 1.
   --limit, -n <n>         Results per page. Default 10 (page x limit must be <= 100).
   --no-enrich             Skip per-result extraction: much cheaper and faster, but
@@ -96,9 +97,12 @@ EXAMPLES
   bun run src/cli.ts search -q "\\"machine learning engineer\\" remote" --no-enrich --limit 20
   bun run src/cli.ts detail https://job-boards.greenhouse.io/acme/jobs/123 --format plain
 
-Requires FIRECRAWL_API_KEY (https://firecrawl.dev). Endpoint: ${baseUrl()} —
-override with FIRECRAWL_API_URL for a self-hosted instance. Enriched results scrape
-each hit, so they cost more credits than a plain search; see the skill's SKILL.md.
+Endpoint: ${baseUrl()} — needs FIRECRAWL_API_KEY (https://firecrawl.dev); override
+with FIRECRAWL_API_URL for a self-hosted instance, which needs no key by default.
+
+COST — this is a metered API. Measured: a plain search is 2 credits per 10 results;
+enrichment adds ~5 per result, so --limit 20 costs ~102. Use --no-enrich for wide
+sweeps and keep --limit small. Every run reports meta.credits_used.
 `
 
 function parseIntFlag(name: string, raw: string | boolean | string[]): number | null {
@@ -120,16 +124,11 @@ async function main(): Promise<number> {
     return cmd ? 0 : 1
   }
 
-  // Fail fast and identifiably when the key is missing: /scrape logs the message
-  // and moves on rather than treating it as a broken portal.
-  if ((cmd === "search" || cmd === "detail") && !apiKey()) {
-    process.stderr.write(
-      JSON.stringify({
-        error:
-          "FIRECRAWL_API_KEY is not set — get a key at https://firecrawl.dev and export it before using this skill",
-        code: "NO_API_KEY",
-      }) + "\n",
-    )
+  // Fail fast and identifiably when the hosted API is targeted without a key. A
+  // self-hosted instance (FIRECRAWL_API_URL) is exempt: it runs unauthenticated
+  // by default, so demanding a key there would reject a working local backend.
+  if ((cmd === "search" || cmd === "detail") && requiresApiKey()) {
+    process.stderr.write(JSON.stringify({ error: NO_API_KEY_MESSAGE, code: "NO_API_KEY" }) + "\n")
     return 1
   }
 

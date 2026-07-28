@@ -24,8 +24,10 @@ per-file diff commands.
   company, location, and posting date from each page). Scope per query with `--site`, `--country`,
   and `--location`; `detail <url>` reads any posting in full. Fills the gap when a market has no
   portal skill yet or a shipped one has broken on a markup change. It is the first portal skill
-  that needs credentials (`FIRECRAWL_API_KEY`, metered), so it ships `enabled: false` and stays
-  zero-runtime-dependency (REST, no SDK).
+  that needs credentials (`FIRECRAWL_API_KEY`) and the first that is metered per result, so it
+  ships `enabled: false` as its steady state - a generalist you invoke directly rather than one
+  `/scrape` runs unattended - and stays zero-runtime-dependency (REST, no SDK). A self-hosted
+  instance via `FIRECRAWL_API_URL` needs no key and no credits.
 
 ## [1.0.0] - 2026-07-22
 

@@ -15,11 +15,30 @@ export function baseUrl(): string {
   return (raw || DEFAULT_API_URL).replace(/\/+$/, "")
 }
 
-/** The API key, or null when unset — callers turn that into a NO_API_KEY error. */
+/** The API key, or null when unset. */
 export function apiKey(): string | null {
   const raw = (process.env.FIRECRAWL_API_KEY ?? "").trim()
   return raw || null
 }
+
+/** True when FIRECRAWL_API_URL points somewhere other than the hosted cloud API. */
+export function isSelfHosted(): boolean {
+  return baseUrl() !== DEFAULT_API_URL
+}
+
+/**
+ * Whether a key is required to proceed. Self-hosted Firecrawl ships with
+ * authentication disabled by default and treats keys as optional, so requiring
+ * one there would reject a perfectly good local instance; only the hosted cloud
+ * API always needs one.
+ */
+export function requiresApiKey(): boolean {
+  return !apiKey() && !isSelfHosted()
+}
+
+export const NO_API_KEY_MESSAGE =
+  "FIRECRAWL_API_KEY is not set — get a key at https://firecrawl.dev and export it, " +
+  "or point FIRECRAWL_API_URL at a self-hosted instance (which needs no key by default)"
 
 export function writeError(error: string, code: string): void {
   process.stderr.write(JSON.stringify({ error, code }) + "\n")
@@ -45,13 +64,17 @@ export interface Envelope<T> {
  */
 export async function apiPost<T>(path: string, payload: unknown): Promise<Envelope<T>> {
   const key = apiKey()
-  if (!key) {
-    throw new Error(
-      "FIRECRAWL_API_KEY is not set — get a key at https://firecrawl.dev and export it, " +
-        "or point FIRECRAWL_API_URL at a self-hosted instance",
-    )
-  }
+  if (requiresApiKey()) throw new Error(NO_API_KEY_MESSAGE)
   const url = `${baseUrl()}${path}`
+  // Keyless means no Authorization header at all - sending a placeholder would
+  // turn an unauthenticated self-host into a 401. When a key IS set it is sent to
+  // whatever FIRECRAWL_API_URL names, including a self-host that requires one.
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": UA,
+    Accept: "application/json",
+  }
+  if (key) headers.Authorization = `Bearer ${key}`
   const maxRetries = 6
   let delay = 500
 
@@ -60,12 +83,7 @@ export async function apiPost<T>(path: string, payload: unknown): Promise<Envelo
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-          "User-Agent": UA,
-          Accept: "application/json",
-        },
+        headers,
         body: JSON.stringify(payload),
         // Enrichment scrapes each result, so a search can legitimately take a
         // while; the timeout is generous but still bounded.
@@ -250,10 +268,16 @@ export function toDetail(doc: ScrapedDoc, requestedUrl: string): JobDetailResult
 }
 
 /**
- * Firecrawl's `tbs` recency filter is bucketed (hour/day/week/month/year), not an
- * exact day count, so `--jobage` maps to the smallest bucket that still covers the
- * requested window — it never excludes a posting the user asked to see. Returns
- * null when no filter applies (unset, or wider than a year).
+ * Map `--jobage` onto Firecrawl's `tbs` filter, picking the smallest bucket that
+ * covers the requested window. Returns null when no filter applies (unset, or
+ * wider than a year).
+ *
+ * IMPORTANT: `tbs` filters on the *search engine's* freshness signal for the page,
+ * NOT on the posting's `date_posted` (which is only extracted later, per result).
+ * So this is a freshness hint, not posting-age filtering: it can both return
+ * postings older than N days and miss recent ones whose page the index dates
+ * differently. It does not honor the portal contract's `--jobage` semantics -
+ * filter on the extracted `date` downstream when the distinction matters.
  */
 export function jobageToTbs(days: number | undefined): string | null {
   if (days === undefined || !Number.isFinite(days) || days <= 0) return null

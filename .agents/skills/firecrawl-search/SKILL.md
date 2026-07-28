@@ -7,12 +7,13 @@ description: >
   Firecrawl and reading a posting's full text. It needs no per-portal HTML parser, so
   it is the fallback when a market's board is unsupported, when a shipped portal
   skill has broken on a markup change, or when a posting URL needs to be read in
-  full. Requires a FIRECRAWL_API_KEY and is disabled by default. Trigger phrases:
+  full. Requires a FIRECRAWL_API_KEY, is metered per result, and is invoked
+  directly rather than run by /scrape. Trigger phrases:
   search the web for jobs, find jobs on <job board>, jobs in <country> without a
   portal skill, read this job posting URL, scrape this job ad, my portal skill is
   broken find jobs anyway.
 context: fork
-enabled: false # needs FIRECRAWL_API_KEY (a paid, metered API) - set to true once yours is exported
+enabled: false # deliberate: a metered per-result source must not run unattended in /scrape - see "Why this stays out of /scrape"
 allowed-tools: Bash(bun run .agents/skills/firecrawl-search/cli/src/cli.ts *)
 ---
 
@@ -29,25 +30,48 @@ board in any market and language with **no markup anchors to maintain**.
 > single site — the board is chosen per query with `--site` — and unlike either, it
 > requires an API key.
 
-## ⚠️ Credentialed and metered
+## ⚠️ Credentialed and metered — invoke it directly, not via `/scrape`
 
-Every other portal skill in this repo is credential-free. **This one is not.** It
-needs `FIRECRAWL_API_KEY` (get one at [firecrawl.dev](https://firecrawl.dev)), and
-each call spends Firecrawl credits. Because of that it ships with
-**`enabled: false`**, so `/scrape` skips it until you opt in:
+Every other portal skill in this repo is credential-free and free to run. **This one
+is neither.** It needs `FIRECRAWL_API_KEY` (get one at
+[firecrawl.dev](https://firecrawl.dev)) and every result costs credits:
 
 ```bash
-export FIRECRAWL_API_KEY="fc-..."           # then set enabled: true above
+export FIRECRAWL_API_KEY="fc-..."
+bun run .agents/skills/firecrawl-search/cli/src/cli.ts search -q "data engineer job opening" --limit 5
 ```
 
-Without the key every command exits `1` with a `NO_API_KEY` error on stderr, which
-`/scrape` logs and steps over — an unset key degrades this source rather than
-breaking a run.
+**Measured credit cost** (from live runs; `meta.credits_used` reports the real figure
+every time):
 
-**Credit cost.** A plain search is 1 credit per query. Enriched search (the default)
-also scrapes each hit to extract company/location/date, which is what makes the
-results usable without a parser — measured at roughly **4-6 credits per result**.
-Keep `--limit` small, or pass `--no-enrich` for a cheap URL-and-title sweep.
+| Call | Cost |
+|------|------|
+| Plain search (`--no-enrich`) | **2 credits per 10 results** — 2 at `--limit 10`, 4 at `--limit 15` |
+| Enriched search (default) | 2 + **~5 per result** — ~27 at `--limit 5`, **~102 at `--limit 20`** |
+| `detail <url>` | one scrape + extraction, ~5 |
+
+### Why this stays out of `/scrape`
+
+`/scrape` has no notion of a metered source. Step 1b runs **every enabled portal**
+as a co-equal primary for several query categories at ~20 results each — so flipping
+`enabled: true` would silently make this the most expensive part of a routine run:
+roughly **100 credits per query**, i.e. several hundred per `/scrape`. That is not a
+sensible default for a source whose free tier is measured in hundreds of credits
+total.
+
+So `enabled: false` here is **not** "enable me once you have a key" — it is the
+intended steady state. Use this skill the way you'd use a generalist tool: **invoke
+it directly** when you need it, with a small `--limit` you have chosen. It still
+triggers by name from its description, and `detail <url>` works on a posting URL from
+*any* source, including another portal whose own `detail` has broken.
+
+If you do enable it for `/scrape`, do it knowingly: cap `--limit` hard and expect a
+recurring per-run bill. A `fallback`-tier source that `/scrape` reaches for only after
+an unsupported or failed portal — with a visible per-run credit budget — would be the
+right way to automate this, and does not exist in the framework today.
+
+Without a key (and without a self-hosted `FIRECRAWL_API_URL`) every command exits `1`
+with `NO_API_KEY` on stderr, so nothing runs up a bill by accident.
 
 ## ℹ️ Hosted-service dependency
 
@@ -55,11 +79,19 @@ This skill depends on the hosted Firecrawl API. If it is unreachable the CLI fai
 gracefully — a non-zero exit with a clear message — so an outage degrades this source
 rather than breaking the surrounding workflow. Firecrawl is also self-hostable
 ([open source](https://github.com/firecrawl/firecrawl)); the skill honors a base-URL
-env var, `FIRECRAWL_API_URL` (default `https://api.firecrawl.dev`):
+env var, `FIRECRAWL_API_URL` (default `https://api.firecrawl.dev`). A self-hosted
+instance runs **unauthenticated by default**, so no key is required when
+`FIRECRAWL_API_URL` is set — and running your own instance is also how you avoid the
+credit costs above entirely:
 
 ```bash
 FIRECRAWL_API_URL=http://localhost:3002 bun run .agents/skills/firecrawl-search/cli/src/cli.ts search -q "data engineer job"
 ```
+
+If your self-host *does* require a key, set `FIRECRAWL_API_KEY` as well and it is sent
+to that instance. Note the corollary: whenever a key is set it goes to whatever
+`FIRECRAWL_API_URL` names, so don't point it at a host you don't trust with your
+cloud key.
 
 ## When to use this skill
 
@@ -90,7 +122,7 @@ Key flags:
   with `--site` (the API rejects both; the CLI catches it before spending credits).
 - `--country <code>` — ISO-3166 alpha-2 search locale, e.g. `--country DK`. Default `US`.
 - `--location <place>` / `-l <place>` — geo-target the results, e.g. `--location "Berlin,Germany"`.
-- `--jobage <days>` — posted within N days. See the bucketing caveat in **Notes**.
+- `--jobage <days>` — search-freshness hint, **not** a posting-date filter. See **Notes**.
 - `--page <n>` — 1-indexed page. Default 1.
 - `--limit <n>` / `-n <n>` — results per page. Default 10; `page × limit` must be ≤ 100.
 - `--no-enrich` — skip per-result extraction. Much cheaper and faster, but
@@ -158,11 +190,15 @@ page. Two habits fix it, and the CLI deliberately does **not** apply them for yo
 
 ## Notes
 
-- **`--jobage` is bucketed, not exact.** Firecrawl's recency filter has
-  hour/day/week/month/year granularity, so `--jobage 14` asks for the **month**
-  bucket — the smallest one that still contains everything you asked for. It never
-  hides a posting inside your window, but it does return some older than N days;
-  filter precisely downstream if that matters.
+- **`--jobage` does not honor the contract's posting-age semantics.** It maps to
+  Firecrawl's `tbs` parameter, which filters on the **search engine's freshness
+  signal for the page** — not on the posting's `date_posted`, which is only extracted
+  afterwards, per result. It is therefore a *hint*, and a lossy one in both
+  directions: it can return postings older than N days, and it can miss recent ones
+  whose page the index dates differently. It is also bucketed
+  (hour/day/week/month/year), so `--jobage 14` requests the **month** bucket. When
+  posting age actually matters, filter on the extracted `date` field downstream
+  rather than trusting this flag.
 - **`--page` re-fetches.** Firecrawl search has no offset parameter, so page N is
   served by requesting `page × limit` results and returning the last window. Page 1
   (the common case) fetches exactly what it needs; deeper pages cost proportionally

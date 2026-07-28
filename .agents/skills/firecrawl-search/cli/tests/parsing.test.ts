@@ -117,8 +117,9 @@ describe("normalizeDate", () => {
   });
 });
 
-// tbs is a bucketed recency filter, so --jobage must round *up* to a bucket that
-// still contains everything the user asked for - never one that would hide it.
+// tbs buckets the search engine's own freshness signal - it is not a filter over
+// the posting's date_posted. --jobage therefore rounds *up* to the smallest
+// covering bucket, which is a hint, not a guarantee about posting age.
 describe("jobageToTbs", () => {
   test("maps day counts to the smallest covering bucket", () => {
     expect(jobageToTbs(1)).toBe("qdr:d");
